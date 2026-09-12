@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hexcasting Iota Generator Pro</title>
+    <!-- Подключаем библиотеку для создания GIF -->
+    <script src="https://cdn.jsdelivr.net/npm/gif.js/dist/gif.js"></script>
+    <style>
+        body {
+            background-color: #1e1e24;
+            color: #d1d1e0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            margin: 0;
+        }
+        h1 {
+            color: #a390e4;
+            margin-top: 0;
+            margin-bottom: 15px;
+            font-size: 24px;
+        }
+        .controls-container {
+            background: #2a2a35;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            width: 100%;
+            max-width: 600px;
+            box-sizing: border-box;
+        }
+        .top-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .settings-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            background: #1e1e24;
+            padding: 15px;
+            border-radius: 6px;
+        }
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .slider-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        input[type="number"] {
+            background: #1e1e24;
+            border: 1px solid #444;
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 16px;
+            width: 100%;
+        }
+        input[type="range"] {
+            accent-color: #a390e4;
+        }
+        input[type="checkbox"] {
+            accent-color: #a390e4;
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+        button {
+            background: #a390e4;
+            color: #1e1e24;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 4px;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        button:hover {
+            background: #8b74d5;
+        }
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+            color: #888;
+        }
+        .canvas-container {
+            position: relative;
+            background: #15151a;
+            border: 2px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+        }
+        .error {
+            color: #e47474;
+            font-weight: bold;
+            font-size: 14px;
+            min-height: 20px;
+        }
+        label {
+            cursor: pointer;
+            user-select: none;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Hexcasting Iota Generator</h1>
+
+    <div class="controls-container">
+        <div class="top-row">
+            <div style="flex-grow: 1;">
+                <input type="number" id="numInput" step="any" value="10" placeholder="Введите число..." oninput="generateIota()">
+            </div>
+            <button id="btnGif" onclick="downloadGif()">Скачать GIF</button>
+        </div>
+        
+        <div class="settings-grid">
+            <div class="control-group">
+                <input type="checkbox" id="chkArrows" checked onchange="updateView()">
+                <label for="chkArrows">Рисовать стрелки</label>
+            </div>
+            
+            <div class="slider-group">
+                <label for="sldScale">Масштаб руны</label>
+                <input type="range" id="sldScale" min="0.5" max="3.0" step="0.1" value="1.0" oninput="updateView()">
+            </div>
+
+            <div class="control-group">
+                <input type="checkbox" id="chkDot" checked onchange="updateView()">
+                <label for="chkDot">Бегающая точка</label>
+            </div>
+
+            <div class="slider-group">
+                <label for="sldSpeed">Скорость точки</label>
+                <input type="range" id="sldSpeed" min="0.01" max="0.15" step="0.01" value="0.04" oninput="updateSpeed()">
+            </div>
+
+            <div class="control-group">
+                <input type="checkbox" id="chkGradient" onchange="updateView()">
+                <label for="chkGradient">Градиент линии</label>
+            </div>
+        </div>
+        
+        <div id="errorMsg" class="error"></div>
+    </div>
+
+    <div class="canvas-container">
+        <canvas id="hexCanvas" width="600" height="400"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('hexCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Глобальные состояния
+        let animFrameId = null;
+        let currentSequence = [];
+        let currentPixelPoints = [];
+        let currentOffsetX = 0;
+        let currentOffsetY = 0;
+        
+        // Переменные анимации
+        let animSegment = 0;
+        let animProgress = 0;
+        let isGifRendering = false;
+
+        const deltas = {
+            0: {dq: 1, dr: 0},
+            1: {dq: 1, dr: -1},
+            2: {dq: 0, dr: -1},
+            3: {dq: -1, dr: 0},
+            4: {dq: -1, dr: 1},
+            5: {dq: 0, dr: 1}
+        };
+
+        // Вспомогательный ключ для ребер (исключение повторов)
+        function getEdgeKey(q1, r1, q2, r2) {
+            let k1 = `${q1},${r1}`;
+            let k2 = `${q2},${r2}`;
+            return k1 < k2 ? `${k1}_${k2}` : `${k2}_${k1}`;
+        }
+
+        // BFS алгоритм поиска пути
+        function getHexcastingSequence(targetVal) {
+            let target = Math.abs(targetVal);
+            let baseDirs = targetVal >= 0 ? [5, 1, 2, 4, 0] : [5, 3, 2, 0, 4];
+            
+            let currQ = 0, currR = 0;
+            let initEdges = new Set();
+
+            for (let d of baseDirs) {
+                let nextQ = currQ + deltas[d].dq;
+                let nextR = currR + deltas[d].dr;
+                initEdges.add(getEdgeKey(currQ, currR, nextQ, nextR));
+                currQ = nextQ;
+                currR = nextR;
+            }
+            let lastDir = baseDirs[baseDirs.length - 1];
+
+            let queue = [{
+                val: 0, q: currQ, r: currR, currentDir: lastDir, visitedEdges: initEdges, path: []
+            }];
+
+            let visitedStates = new Set();
+            let candidates = [];
+            let minPathLength = Infinity;
+
+            while (queue.length > 0) {
+                let current = queue.shift();
+                if (current.path.length > minPathLength) break;
+
+                if (Math.abs(current.val - target) < 1e-6) {
+                    minPathLength = current.path.length;
+                    candidates.push(current.path);
+                    continue;
+                }
+                
+                if (current.path.length >= 15) continue;
+                
+                let ops = [
+                    {delta: 0, nextVal: current.val + 1},
+                    {delta: 1, nextVal: current.val + 5},
+                    {delta: 5, nextVal: current.val + 10},
+                    {delta: 2, nextVal: current.val * 2},
+                    {delta: 4, nextVal: current.val / 2}
+                ];
+                
+                for (let op of ops) {
+                    let nextDir = (current.currentDir + op.delta) % 6;
+                    let nextQ = current.q + deltas[nextDir].dq;
+                    let nextR = current.r + deltas[nextDir].dr;
+                    let edgeKey = getEdgeKey(current.q, current.r, nextQ, nextR);
+
+                    if (current.visitedEdges.has(edgeKey)) continue;
+
+                    if (op.nextVal <= Math.max(100, target * 2 + 10)) {
+                        let rounded = Math.round(op.nextVal * 1000000) / 1000000;
+                        let stateKey = `${rounded}_${nextQ}_${nextR}_${nextDir}`;
+
+                        if (!visitedStates.has(stateKey)) {
+                            visitedStates.add(stateKey);
+                            let nextEdges = new Set(current.visitedEdges);
+                            nextEdges.add(edgeKey);
+                            queue.push({ val: rounded, q: nextQ, r: nextR, currentDir: nextDir, visitedEdges: nextEdges, path: [...current.path, op.delta] });
+                        }
+                    }
+                }
+            }
+            
+            if (candidates.length === 0) throw new Error("Слишком сложное число (не удалось найти путь без пересечений)");
+
+            // Выбор самого компактного паттерна
+            let bestPath = candidates[0];
+            let bestArea = Infinity;
+            for (let path of candidates) {
+                let q = 0, r = 0, minQ = 0, maxQ = 0, minR = 0, maxR = 0;
+                let dirList = [...baseDirs];
+                let cDir = lastDir;
+                for (let delta of path) { cDir = (cDir + delta) % 6; dirList.push(cDir); }
+                for (let d of dirList) {
+                    q += deltas[d].dq; r += deltas[d].dr;
+                    if (q < minQ) minQ = q; if (q > maxQ) maxQ = q;
+                    if (r < minR) minR = r; if (r > maxR) maxR = r;
+                }
+                let area = (maxQ - minQ + 1) * (maxR - minR + 1);
+                if (area < bestArea) { bestArea = area; bestPath = path; }
+            }
+
+            let dirs = [...baseDirs];
+            let currentDir = lastDir;
+            for (let delta of bestPath) {
+                let nextDir = (currentDir + delta) % 6;
+                dirs.push(nextDir);
+                currentDir = nextDir;
+            }
+            
+            return dirs;
+        }
+
+        // Отрисовка элементов
+        function getSegmentColor(index, total) {
+            let useGradient = document.getElementById('chkGradient').checked;
+            if (!useGradient) return "#a390e4"; // Стандартный цвет
+            // Градиент от фиолетового (260) до розового (320)
+            let hue = 260 + (index / Math.max(1, total - 1)) * 60;
+            return `hsl(${hue}, 70%, 65%)`;
+        }
+
+        function drawLineOrArrow(ctx, x1, y1, x2, y2, color, isArrow) {
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.lineCap = "round";
+            ctx.stroke();
+
+            if (isArrow) {
+                let angle = Math.atan2(y2 - y1, x2 - x1);
+                let headLen = 11;
+                let headAngle = Math.PI / 6;
+                ctx.beginPath();
+                ctx.moveTo(x2, y2);
+                ctx.lineTo(x2 - headLen * Math.cos(angle - headAngle), y2 - headLen * Math.sin(angle - headAngle));
+                ctx.lineTo(x2 - headLen * Math.cos(angle + headAngle), y2 - headLen * Math.sin(angle + headAngle));
+                ctx.closePath();
+                ctx.fillStyle = color;
+                ctx.fill();
+            }
+        }
+
+        function renderBasePattern(pixelPoints, offsetX, offsetY) {
+            ctx.fillStyle = "#15151a"; // Фон
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            let useArrows = document.getElementById('chkArrows').checked;
+            let totalSegments = pixelPoints.length - 1;
+
+            // Отрисовка линий/стрелок
+            pixelPoints.forEach((pt, i) => {
+                if (i > 0) {
+                    let prevPt = pixelPoints[i - 1];
+                    let x1 = prevPt.x + offsetX;
+                    let y1 = prevPt.y + offsetY;
+                    let x2 = pt.x + offsetX;
+                    let y2 = pt.y + offsetY;
+
+                    let dx = x2 - x1;
+                    let dy = y2 - y1;
+                    let angle = Math.atan2(dy, dx);
+                    
+                    let uX1 = x1 + 5 * Math.cos(angle);
+                    let uY1 = y1 + 5 * Math.sin(angle);
+                    let uX2 = x2 - 5 * Math.cos(angle);
+                    let uY2 = y2 - 5 * Math.sin(angle);
+
+                    let color = getSegmentColor(i - 1, totalSegments);
+                    drawLineOrArrow(ctx, uX1, uY1, uX2, uY2, color, useArrows);
+                }
+            });
+
+            // Отрисовка узлов
+            pixelPoints.forEach((pt, i) => {
+                ctx.beginPath();
+                ctx.arc(pt.x + offsetX, pt.y + offsetY, 5, 0, 2 * Math.PI);
+                ctx.fillStyle = i === 0 ? "#4caf50" : (i === pixelPoints.length - 1 ? "#f44336" : "#2a2a35");
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = getSegmentColor(Math.max(0, i - 1), totalSegments);
+                ctx.stroke();
+            });
+        }
+
+        function drawAnimatedDot(pixelPoints, segmentIndex, progress, offsetX, offsetY) {
+            if (segmentIndex >= pixelPoints.length - 1) return;
+            
+            let p1 = pixelPoints[segmentIndex];
+            let p2 = pixelPoints[segmentIndex + 1];
+
+            let x1 = p1.x + offsetX;
+            let y1 = p1.y + offsetY;
+            let x2 = p2.x + offsetX;
+            let y2 = p2.y + offsetY;
+
+            let dotX = x1 + (x2 - x1) * progress;
+            let dotY = y1 + (y2 - y1) * progress;
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(dotX, dotY, 6, 0, 2 * Math.PI);
+            ctx.fillStyle = "#ffeb3b";
+            ctx.shadowColor = "#ffeb3b";
+            ctx.shadowBlur = 10;
+            ctx.fill();
+            ctx.restore();
+        }
+
+        function startAnimation() {
+            if (animFrameId) cancelAnimationFrame(animFrameId);
+            
+            let useDot = document.getElementById('chkDot').checked;
+            let speed = parseFloat(document.getElementById('sldSpeed').value);
+
+            function animate() {
+                if (isGifRendering) return; // Пауза рендера при сборке GIF
+                
+                renderBasePattern(currentPixelPoints, currentOffsetX, currentOffsetY);
+
+                if (useDot && currentPixelPoints.length >= 2) {
+                    drawAnimatedDot(currentPixelPoints, animSegment, animProgress, currentOffsetX, currentOffsetY);
+                    animProgress += speed;
+                    if (animProgress >= 1) {
+                        animProgress = 0;
+                        animSegment++;
+                        if (animSegment >= currentPixelPoints.length - 1) {
+                            animSegment = 0;
+                        }
+                    }
+                }
+
+                animFrameId = requestAnimationFrame(animate);
+            }
+            animate();
+        }
+
+        function updateSpeed() {
+            // Только для изменения скорости на лету
+            if (!isGifRendering) startAnimation();
+        }
+
+        function updateView() {
+            if (currentSequence.length === 0) return;
+            
+            let q = 0, r = 0;
+            let points = [{q, r, dir: null}];
+            for (let d of currentSequence) {
+                q += deltas[d].dq;
+                r += deltas[d].dr;
+                points.push({q, r, dir: d});
+            }
+
+            let userScale = parseFloat(document.getElementById('sldScale').value);
+            let baseHexSize = 24 * userScale;
+
+            // Расчет размеров (относительный)
+            let rawPoints = points.map(p => ({
+                x: baseHexSize * Math.sqrt(3) * (p.q + p.r / 2),
+                y: baseHexSize * 1.5 * p.r
+            }));
+
+            let minX = Math.min(...rawPoints.map(p => p.x));
+            let maxX = Math.max(...rawPoints.map(p => p.x));
+            let minY = Math.min(...rawPoints.map(p => p.y));
+            let maxY = Math.max(...rawPoints.map(p => p.y));
+
+            let boundsW = maxX - minX || 1;
+            let boundsH = maxY - minY || 1;
+
+            // Авто-адаптация, если руна выходит за рамки холста
+            let fitScale = Math.min(1.0, (canvas.width - 60) / boundsW, (canvas.height - 60) / boundsH);
+            let finalHexSize = baseHexSize * fitScale;
+
+            currentPixelPoints = points.map(p => ({
+                x: finalHexSize * Math.sqrt(3) * (p.q + p.r / 2),
+                y: finalHexSize * 1.5 * p.r,
+                p
+            }));
+
+            minX = Math.min(...currentPixelPoints.map(p => p.x));
+            maxX = Math.max(...currentPixelPoints.map(p => p.x));
+            minY = Math.min(...currentPixelPoints.map(p => p.y));
+            maxY = Math.max(...currentPixelPoints.map(p => p.y));
+
+            currentOffsetX = (canvas.width - (maxX - minX)) / 2 - minX;
+            currentOffsetY = (canvas.height - (maxY - minY)) / 2 - minY;
+
+            animSegment = 0;
+            animProgress = 0;
+            
+            startAnimation();
+        }
+
+        function generateIota() {
+            let numStr = document.getElementById('numInput').value;
+            let numInput = parseFloat(numStr);
+            let errorMsg = document.getElementById('errorMsg');
+            
+            if (numStr.trim() === "" || isNaN(numInput)) {
+                errorMsg.innerText = "Введите число";
+                return;
+            }
+
+            try {
+                errorMsg.innerText = "";
+                currentSequence = getHexcastingSequence(numInput);
+                updateView();
+            } catch (e) {
+                errorMsg.innerText = e.message;
+            }
+        }
+
+        // --- Экспорт GIF ---
+        async function downloadGif() {
+            if (currentPixelPoints.length < 2) return;
+            
+            let btn = document.getElementById('btnGif');
+            let useDot = document.getElementById('chkDot').checked;
+            let speed = parseFloat(document.getElementById('sldSpeed').value);
+            
+            btn.disabled = true;
+            btn.innerText = "Сборка GIF... 0%";
+            isGifRendering = true;
+
+            try {
+                // Подгружаем Worker как Blob, чтобы обойти CORS при локальном запуске (file://)
+                let workerRes = await fetch('https://cdn.jsdelivr.net/npm/gif.js/dist/gif.worker.js');
+                let workerText = await workerRes.text();
+                let workerBlob = new Blob([workerText], {type: 'application/javascript'});
+                let workerUrl = URL.createObjectURL(workerBlob);
+
+                let gif = new GIF({
+                    workers: 2,
+                    quality: 10,
+                    workerScript: workerUrl,
+                    width: canvas.width,
+                    height: canvas.height,
+                    background: '#15151a'
+                });
+
+                // Вычисляем количество кадров
+                let fps = 30; 
+                let delay = 1000 / fps;
+                
+                let framesToRender = useDot ? Math.floor((currentPixelPoints.length - 1) / speed) : 1;
+                
+                let simSegment = 0;
+                let simProgress = 0;
+
+                for (let i = 0; i < framesToRender; i++) {
+                    renderBasePattern(currentPixelPoints, currentOffsetX, currentOffsetY);
+                    if (useDot) {
+                        drawAnimatedDot(currentPixelPoints, simSegment, simProgress, currentOffsetX, currentOffsetY);
+                        simProgress += speed;
+                        if (simProgress >= 1) {
+                            simProgress = 0;
+                            simSegment++;
+                        }
+                    }
+                    gif.addFrame(ctx, {copy: true, delay: delay});
+                }
+
+                gif.on('progress', function(p) {
+                    btn.innerText = `Сборка GIF... ${Math.round(p * 100)}%`;
+                });
+
+                gif.on('finished', function(blob) {
+                    let url = URL.createObjectURL(blob);
+                    let a = document.createElement('a');
+                    a.href = url;
+                    a.download = `iota_${document.getElementById('numInput').value}.gif`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    
+                    // Возвращаем UI в норму
+                    btn.disabled = false;
+                    btn.innerText = "Скачать GIF";
+                    isGifRendering = false;
+                    startAnimation();
+                });
+
+                gif.render();
+
+            } catch (err) {
+                console.error(err);
+                document.getElementById('errorMsg').innerText = "Ошибка сборки GIF (нужен интернет для загрузки библиотеки)";
+                btn.disabled = false;
+                btn.innerText = "Скачать GIF";
+                isGifRendering = false;
+                startAnimation();
+            }
+        }
+
+        // Инициализация при старте
+        window.onload = generateIota;
+    </script>
+</body>
+</html>
